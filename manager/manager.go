@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"sort"
@@ -14,25 +16,40 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const (
+	SignPostBodyY = iota
+	SignPostBodyN
+)
+
+type smsResp struct {
+	Code    string `json:"code"`
+	Success bool   `json:"success"`
+	Message string `json:"msg"`
+}
+
 type AnlinkSmsManger struct {
-	APIKey      string
-	APISecret   string
-	TaskCode    string
-	ChannelType string
-	SmsURL      string
-	ContentType string
-	Accept      string
+	APIKey        string
+	APISecret     string
+	TaskCode      string
+	ChannelType   string
+	SmsURL        string
+	ContentType   string
+	Accept        string
+	SignPostBody  int
+	AnlinkVersion string
 }
 
 func NewAnlinkSmsManager(u string, key string, secret string, taskCode string, channelType string) *AnlinkSmsManger {
 	return &AnlinkSmsManger{
-		APIKey:      key,
-		APISecret:   secret,
-		TaskCode:    taskCode,
-		ChannelType: channelType,
-		SmsURL:      u,
-		ContentType: "application/json; charset=utf-8",
-		Accept:      "application/json",
+		APIKey:        key,
+		APISecret:     secret,
+		TaskCode:      taskCode,
+		ChannelType:   channelType,
+		SmsURL:        u,
+		ContentType:   "application/json; charset=utf-8",
+		Accept:        "application/json",
+		SignPostBody:  SignPostBodyN,
+		AnlinkVersion: "2",
 	}
 }
 
@@ -57,6 +74,7 @@ func (man *AnlinkSmsManger) Send(receiver string, data map[string]string) error 
 		return err
 	}
 
+	logrus.Debugf("request body: %v", string(bs))
 	request, err := http.NewRequest("POST", man.SmsURL, bytes.NewReader(bs))
 	if err != nil {
 		return err
@@ -72,10 +90,15 @@ func (man *AnlinkSmsManger) Send(receiver string, data map[string]string) error 
 	headers.Add("x-anlink-signature-nonce", fmt.Sprintf("%d", rand.Int31()))
 	headers.Add("prd-id", "0")
 	headers.Add("x-anlink-if-verify-response", "1")
-	headers.Add("x-anlink-if-sign-postbody", "1")
+	headers.Add("x-anlink-if-sign-postbody", fmt.Sprintf("%d", man.SignPostBody))
 	headers.Add("content-type", man.ContentType)
 	headers.Add("accept", man.Accept)
-	// TODO check if sign postbody
+	headers.Add("x-anlink-signature-method", "HMAC-SHA1")
+	headers.Add("x-anlink-version", man.AnlinkVersion)
+	if man.SignPostBody == SignPostBodyY {
+		// TODO sign postbody
+
+	}
 
 	sort.Sort(headers)
 	data2Signed, err := headers.ToJsonObject()
@@ -87,8 +110,8 @@ func (man *AnlinkSmsManger) Send(receiver string, data map[string]string) error 
 	if err != nil {
 		return err
 	}
-	logrus.Debugf("Signature: %x\n", signature)
-	headers.Add("x-anlink-signature", string(signature))
+	logrus.Debugf("Signature: %v\n", signature)
+	headers.Add("x-anlink-signature", signature)
 
 	for _, kv := range headers {
 		k := kv[0].(string)
@@ -103,12 +126,28 @@ func (man *AnlinkSmsManger) Send(receiver string, data map[string]string) error 
 	}
 	defer resp.Body.Close()
 
-	return nil
+	respBytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	logrus.Debugf("sms resp: %v", string(respBytes))
+
+	var sResp smsResp
+	err = json.Unmarshal(respBytes, &sResp)
+	if err != nil {
+		return fmt.Errorf("Decode sms resp error: %v", err)
+	}
+	if sResp.Success {
+		return nil
+	}
+	return fmt.Errorf("error: %v", sResp.Message)
+
 }
 
 // HMAC SHA1
-func sign(data []byte, key []byte) ([]byte, error) {
+func sign(data []byte, key []byte) (string, error) {
 	mac := hmac.New(sha1.New, key)
 	mac.Write(data)
-	return mac.Sum(nil), nil
+	// return mac.Sum(nil), nil
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil)), nil
 }
