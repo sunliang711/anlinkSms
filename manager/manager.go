@@ -21,6 +21,15 @@ const (
 	SignPostBodyN
 )
 
+const (
+	VerifyResponseY = iota
+	VerifyResponseN
+)
+
+const (
+	ANLINKVERSION = "2"
+)
+
 type smsResp struct {
 	Code    string `json:"code"`
 	Success bool   `json:"success"`
@@ -28,29 +37,38 @@ type smsResp struct {
 }
 
 type AnlinkSmsManger struct {
-	APIKey        string
-	APISecret     string
-	TaskCode      string
-	ChannelType   string
-	SmsURL        string
-	ContentType   string
-	Accept        string
-	SignPostBody  int
-	AnlinkVersion string
+	APIKey      string
+	APISecret   string
+	TaskCode    string
+	ChannelType string
+	SmsURL      string
+	ContentType string
+	Accept      string
+	// 是否对POST body签名
+	IfSignPostBody   int
+	IfVerifyResponse int
+	AnlinkVersion    string
+	// 模板变量,调用send时需要按照初始化该成员的顺序传参
+	TemplateVars []string
 }
 
-func NewAnlinkSmsManager(u string, key string, secret string, taskCode string, channelType string) *AnlinkSmsManger {
-	return &AnlinkSmsManger{
-		APIKey:        key,
-		APISecret:     secret,
-		TaskCode:      taskCode,
-		ChannelType:   channelType,
-		SmsURL:        u,
-		ContentType:   "application/json; charset=utf-8",
-		Accept:        "application/json",
-		SignPostBody:  SignPostBodyN,
-		AnlinkVersion: "2",
+func NewAnlinkSmsManager(smsURL string, key string, secret string, taskCode string, channelType string, templateVars ...string) *AnlinkSmsManger {
+	man := &AnlinkSmsManger{
+		APIKey:           key,
+		APISecret:        secret,
+		TaskCode:         taskCode,
+		ChannelType:      channelType,
+		SmsURL:           smsURL,
+		ContentType:      "application/json; charset=utf-8",
+		Accept:           "application/json",
+		IfSignPostBody:   SignPostBodyN,
+		IfVerifyResponse: VerifyResponseN,
+		AnlinkVersion:    ANLINKVERSION,
 	}
+	man.TemplateVars = make([]string, len(templateVars))
+	copy(man.TemplateVars, templateVars)
+
+	return man
 }
 
 type RequestBody struct {
@@ -60,8 +78,15 @@ type RequestBody struct {
 	Params      interface{} `json:"params"`
 }
 
-func (man *AnlinkSmsManger) Send(receiver string, data map[string]string) error {
+func (man *AnlinkSmsManger) Send(receiver string, codes ...string) error {
 	logrus.SetLevel(logrus.DebugLevel)
+	if len(man.TemplateVars) != len(codes) {
+		return fmt.Errorf("code number not match template var")
+	}
+	data := make(map[string]string)
+	for i, code := range codes {
+		data[man.TemplateVars[i]] = code
+	}
 
 	body := RequestBody{
 		TaskCode:    man.TaskCode,
@@ -90,12 +115,12 @@ func (man *AnlinkSmsManger) Send(receiver string, data map[string]string) error 
 	headers.Add("x-anlink-signature-nonce", fmt.Sprintf("%d", rand.Int31()))
 	headers.Add("prd-id", "0")
 	headers.Add("x-anlink-if-verify-response", "1")
-	headers.Add("x-anlink-if-sign-postbody", fmt.Sprintf("%d", man.SignPostBody))
+	headers.Add("x-anlink-if-sign-postbody", fmt.Sprintf("%d", man.IfSignPostBody))
 	headers.Add("content-type", man.ContentType)
 	headers.Add("accept", man.Accept)
 	headers.Add("x-anlink-signature-method", "HMAC-SHA1")
 	headers.Add("x-anlink-version", man.AnlinkVersion)
-	if man.SignPostBody == SignPostBodyY {
+	if man.IfSignPostBody == SignPostBodyY {
 		// TODO sign postbody
 
 	}
